@@ -4,6 +4,7 @@ param(
     [string] $Architecture = "x64",
     [string[]] $Targets = @("Build", "Tests"),
     [switch] $Help,
+    [switch] $SkipBuild,
     [Parameter(Position=0, ValueFromRemainingArguments=$true)] $ExtraParameters )
 
 if($Help)
@@ -13,6 +14,7 @@ if($Help)
     Write-Host "Options:"
     Write-Host "  -Targets <TARGETS...>              Comma separated build targets to run (Build, Tests; Default is a full build and tests)"
     Write-Host "  -Help                              Display this help message"
+    Write-Host "  -SkipBuild                         Only initialise tooling and skip product build"
     exit 0
 }
 
@@ -20,23 +22,28 @@ if($Help)
 $RepoRoot = "$PSScriptRoot"
 
 $sdkVersion = '1.0.1'
+if (!$env:DOTNET_INSTALL_DIR)
+{
+    $env:DOTNET_INSTALL_DIR="$RepoRoot\.dotnetsdk"
+}
+$sdkInstallPath = "$env:DOTNET_INSTALL_DIR\sdk-$sdkVersion"
 
 function Install-DotnetSdk([string] $sdkVersion)
 {
     Write-Host "# Install .NET Core Sdk versione '$sdkVersion'" -foregroundcolor "magenta"
     $sdkInstallScriptUrl = "https://raw.githubusercontent.com/dotnet/cli/rel/1.0.0/scripts/obtain/dotnet-install.ps1"
-    $sdkInstallScriptPath = ".dotnetsdk\dotnet_cli_install.ps1"
-    Write-Host "Downloading sdk install script '$sdkInstallScriptUrl' to '$sdkInstallScriptPath'"
-    mkdir "$RepoRoot\.dotnetsdk" -Force | Out-Null
+    
+    Write-Host "Downloading sdk install script '$sdkInstallScriptUrl' to '$env:DOTNET_INSTALL_DIR'"
+    New-Item "$env:DOTNET_INSTALL_DIR" -Type directory -ErrorAction Ignore
     try {
-      Invoke-WebRequest $sdkInstallScriptUrl -OutFile "$RepoRoot\$sdkInstallScriptPath"
+      Invoke-WebRequest $sdkInstallScriptUrl -OutFile "$env:DOTNET_INSTALL_DIR\dotnet-install.ps1"
     } catch {
       Write-Host "failed $_.Exception"
       exit 1
     }
 
     Write-Host "Running sdk install script..."
-    ./.dotnetsdk/dotnet_cli_install.ps1 -InstallDir ".dotnetsdk\sdk-$sdkVersion" -Version $sdkVersion
+    Invoke-Expression "$env:DOTNET_INSTALL_DIR/dotnet-install.ps1 -InstallDir $sdkInstallPath -Channel preview -version $sdkVersion"
 }
 
 function Run-Cmd
@@ -52,16 +59,22 @@ function Run-Cmd
 
 function Using-Sdk ([string] $sdkVersion)
 {
-  $sdkPath = "$RepoRoot\.dotnetsdk\sdk-$sdkVersion"
   Write-Host "# Using sdk '$sdkVersion'" -foregroundcolor "magenta"
-  $env:Path = "$sdkPath;$env:Path"
+  $env:Path = "$sdkInstallPath;$env:Path"
   Run-Cmd "dotnet" "--version"
 }
 
 # main
-Install-DotnetSdk $sdkVersion
-
+Write-Host Checking $sdkInstallPath
+if (!(Test-Path $sdkInstallPath))
+{
+  Install-DotnetSdk $sdkVersion
+}
 Using-Sdk $sdkVersion
-
+if($SkipBuild)
+{
+  Write-Host "Skipping dotnet msbuild build.proj /m /v:diag /p:Architecture=" $Architecture $ExtraParameters
+  exit 0
+}
 dotnet msbuild build.proj /m /v:diag /p:Architecture=$Architecture $ExtraParameters
 if ($LASTEXITCODE -ne 0) { throw "Failed to build" } 
